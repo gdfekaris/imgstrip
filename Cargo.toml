@@ -8,6 +8,7 @@ clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = [
     "jpeg", "png", "webp", "bmp", "tiff", "gif"
 ] }
+libheif-rs = { version = "2", features = ["embedded-libheif"] }
 thiserror = "2"
 
 [dev-dependencies]

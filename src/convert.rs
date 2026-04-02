@@ -7,7 +7,8 @@ use image::codecs::jpeg::JpegEncoder;
 use image::codecs::webp::WebPEncoder;
 
 use crate::error::ImgstripError;
-use crate::formats::{OutputFormat, default_extension};
+use crate::formats::{self, ImageFormat, OutputFormat, default_extension};
+use crate::heic;
 
 /// Derive the output path by replacing the input's extension with the target format's extension.
 pub fn derive_output_path(input: &Path, format: OutputFormat) -> PathBuf {
@@ -39,8 +40,13 @@ pub fn convert_file(
         });
     }
 
-    // Decode
-    let img = image::open(input).map_err(|e| ImgstripError::DecodeError(e.to_string()))?;
+    // Decode — use libheif for HEIC, image crate for everything else
+    let detected = formats::detect_format(input)?;
+    let img = if detected == ImageFormat::Heic {
+        heic::decode_heic(input)?
+    } else {
+        image::open(input).map_err(|e| ImgstripError::DecodeError(e.to_string()))?
+    };
 
     // Encode to target format
     let out_file = fs::File::create(output).map_err(|e| ImgstripError::IoError {
@@ -289,5 +295,54 @@ mod tests {
         let output = dir.path().join("photo.jpg");
         convert_file(&input, &output, OutputFormat::Jpeg, 90, false).unwrap();
         assert_valid_image(&output, 8, 8);
+    }
+
+    // --- HEIC conversion tests ---
+
+    const HEIC_FIXTURE: &str = "tests/fixtures/sample.heic";
+
+    #[test]
+    fn heic_to_jpeg() {
+        let dir = TempDir::new().unwrap();
+        let input = PathBuf::from(HEIC_FIXTURE);
+        let output = dir.path().join("photo.jpg");
+        convert_file(&input, &output, OutputFormat::Jpeg, 90, false).unwrap();
+        assert_valid_image(&output, 64, 64);
+    }
+
+    #[test]
+    fn heic_to_png() {
+        let dir = TempDir::new().unwrap();
+        let input = PathBuf::from(HEIC_FIXTURE);
+        let output = dir.path().join("photo.png");
+        convert_file(&input, &output, OutputFormat::Png, 90, false).unwrap();
+        assert_valid_image(&output, 64, 64);
+    }
+
+    #[test]
+    fn heic_to_webp() {
+        let dir = TempDir::new().unwrap();
+        let input = PathBuf::from(HEIC_FIXTURE);
+        let output = dir.path().join("photo.webp");
+        convert_file(&input, &output, OutputFormat::WebP, 90, false).unwrap();
+        assert_valid_image(&output, 64, 64);
+    }
+
+    #[test]
+    fn heic_to_bmp() {
+        let dir = TempDir::new().unwrap();
+        let input = PathBuf::from(HEIC_FIXTURE);
+        let output = dir.path().join("photo.bmp");
+        convert_file(&input, &output, OutputFormat::Bmp, 90, false).unwrap();
+        assert_valid_image(&output, 64, 64);
+    }
+
+    #[test]
+    fn heic_to_tiff() {
+        let dir = TempDir::new().unwrap();
+        let input = PathBuf::from(HEIC_FIXTURE);
+        let output = dir.path().join("photo.tiff");
+        convert_file(&input, &output, OutputFormat::Tiff, 90, false).unwrap();
+        assert_valid_image(&output, 64, 64);
     }
 }
