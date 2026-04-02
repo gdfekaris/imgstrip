@@ -2,7 +2,254 @@ use std::fs;
 use std::path::Path;
 
 use crate::error::ImgstripError;
-use crate::formats::{self, ImageFormat};
+use crate::formats::{self, ImageFormat, OutputFormat};
+use crate::heic;
+
+/// Raw metadata bytes extracted from a source image.
+/// Carries opaque bytes to avoid lossy round-tripping through parsed structures.
+#[derive(Debug, Default, Clone)]
+pub struct MetadataBundle {
+    /// Raw EXIF bytes (TIFF-header-prefixed). No "Exif\0\0" wrapper.
+    pub exif: Option<Vec<u8>>,
+    /// Raw XMP bytes (the XML payload, no container prefix).
+    pub xmp: Option<Vec<u8>>,
+    /// Raw ICC profile bytes.
+    pub icc: Option<Vec<u8>>,
+}
+
+impl MetadataBundle {
+    /// Returns true if all metadata fields are empty.
+    pub fn is_empty(&self) -> bool {
+        self.exif.is_none() && self.xmp.is_none() && self.icc.is_none()
+    }
+}
+
+/// Extract metadata from an image file into a MetadataBundle.
+pub fn extract(input: &Path) -> Result<MetadataBundle, ImgstripError> {
+    let format = formats::detect_format(input)?;
+
+    match format {
+        ImageFormat::Jpeg => extract_jpeg(input),
+        ImageFormat::Png => extract_png(input),
+        ImageFormat::WebP => extract_webp(input),
+        ImageFormat::Tiff => extract_tiff(input),
+        ImageFormat::Heic => heic::extract_metadata(input),
+        ImageFormat::Bmp | ImageFormat::Gif => Ok(MetadataBundle::default()),
+    }
+}
+
+fn extract_jpeg(input: &Path) -> Result<MetadataBundle, ImgstripError> {
+    use img_parts::jpeg::{markers, Jpeg};
+    use img_parts::{ImageEXIF, ImageICC};
+
+    let data = read_file(input)?;
+    let jpeg = Jpeg::from_bytes(data.into())
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to parse JPEG: {e}")))?;
+
+    let exif = jpeg.exif().map(|b| b.to_vec());
+
+    const XMP_PREFIX: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+    let xmp = jpeg.segments().iter().find_map(|seg| {
+        if seg.marker() == markers::APP1 && seg.contents().starts_with(XMP_PREFIX) {
+            Some(seg.contents()[XMP_PREFIX.len()..].to_vec())
+        } else {
+            None
+        }
+    });
+
+    let icc = jpeg.icc_profile().map(|b| b.to_vec());
+
+    Ok(MetadataBundle { exif, xmp, icc })
+}
+
+fn extract_png(input: &Path) -> Result<MetadataBundle, ImgstripError> {
+    use img_parts::png::Png;
+    use img_parts::{ImageEXIF, ImageICC};
+
+    let data = read_file(input)?;
+    let png = Png::from_bytes(data.into())
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to parse PNG: {e}")))?;
+
+    let exif = png.exif().map(|b| b.to_vec());
+    let icc = png.icc_profile().map(|b| b.to_vec());
+
+    Ok(MetadataBundle { exif, xmp: None, icc })
+}
+
+fn extract_webp(input: &Path) -> Result<MetadataBundle, ImgstripError> {
+    use img_parts::webp::{WebP, CHUNK_XMP};
+    use img_parts::{ImageEXIF, ImageICC};
+
+    let data = read_file(input)?;
+    let webp = WebP::from_bytes(data.into())
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to parse WebP: {e}")))?;
+
+    let exif = webp.exif().map(|b| b.to_vec());
+    let icc = webp.icc_profile().map(|b| b.to_vec());
+    let xmp = webp
+        .chunk_by_id(CHUNK_XMP)
+        .and_then(|c| c.content().data())
+        .map(|b| b.to_vec());
+
+    Ok(MetadataBundle { exif, xmp, icc })
+}
+
+fn extract_tiff(input: &Path) -> Result<MetadataBundle, ImgstripError> {
+    use little_exif::metadata::Metadata;
+
+    let metadata = Metadata::new_from_path(input)
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to read TIFF metadata: {e}")))?;
+
+    let exif = metadata.encode().ok().filter(|v| !v.is_empty());
+
+    Ok(MetadataBundle {
+        exif,
+        xmp: None,
+        icc: None,
+    })
+}
+
+/// Inject metadata from a MetadataBundle into an already-encoded output file.
+/// Handles JPEG, PNG, and WebP. BMP/GIF are no-ops.
+pub fn inject(
+    output: &Path,
+    format: OutputFormat,
+    bundle: &MetadataBundle,
+) -> Result<(), ImgstripError> {
+    if bundle.is_empty() {
+        return Ok(());
+    }
+
+    match format {
+        OutputFormat::Jpeg => inject_jpeg(output, bundle),
+        OutputFormat::Png => inject_png(output, bundle),
+        OutputFormat::WebP => inject_webp(output, bundle),
+        OutputFormat::Bmp | OutputFormat::Gif | OutputFormat::Tiff => Ok(()),
+    }
+}
+
+fn inject_jpeg(output: &Path, bundle: &MetadataBundle) -> Result<(), ImgstripError> {
+    use img_parts::jpeg::{markers, Jpeg, JpegSegment};
+    use img_parts::{Bytes, ImageEXIF, ImageICC};
+
+    let data = read_file(output)?;
+    let mut jpeg = Jpeg::from_bytes(data.into())
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to parse JPEG for injection: {e}")))?;
+
+    if let Some(ref exif) = bundle.exif {
+        jpeg.set_exif(Some(Bytes::from(exif.clone())));
+    }
+
+    if let Some(ref xmp) = bundle.xmp {
+        const XMP_PREFIX: &[u8] = b"http://ns.adobe.com/xap/1.0/\0";
+        let mut payload = XMP_PREFIX.to_vec();
+        payload.extend_from_slice(xmp);
+        jpeg.segments_mut().insert(
+            0,
+            JpegSegment::new_with_contents(markers::APP1, Bytes::from(payload)),
+        );
+    }
+
+    if let Some(ref icc) = bundle.icc {
+        jpeg.set_icc_profile(Some(Bytes::from(icc.clone())));
+    }
+
+    let file = fs::File::create(output).map_err(|e| ImgstripError::IoError {
+        path: output.to_path_buf(),
+        source: e,
+    })?;
+    jpeg.encoder()
+        .write_to(file)
+        .map_err(|e| ImgstripError::IoError {
+            path: output.to_path_buf(),
+            source: e,
+        })?;
+
+    Ok(())
+}
+
+fn inject_png(output: &Path, bundle: &MetadataBundle) -> Result<(), ImgstripError> {
+    use img_parts::png::Png;
+    use img_parts::{Bytes, ImageEXIF, ImageICC};
+
+    let data = read_file(output)?;
+    let mut png = Png::from_bytes(data.into())
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to parse PNG for injection: {e}")))?;
+
+    if let Some(ref exif) = bundle.exif {
+        png.set_exif(Some(Bytes::from(exif.clone())));
+    }
+
+    if let Some(ref icc) = bundle.icc {
+        png.set_icc_profile(Some(Bytes::from(icc.clone())));
+    }
+
+    let file = fs::File::create(output).map_err(|e| ImgstripError::IoError {
+        path: output.to_path_buf(),
+        source: e,
+    })?;
+    png.encoder()
+        .write_to(file)
+        .map_err(|e| ImgstripError::IoError {
+            path: output.to_path_buf(),
+            source: e,
+        })?;
+
+    Ok(())
+}
+
+fn inject_webp(output: &Path, bundle: &MetadataBundle) -> Result<(), ImgstripError> {
+    use img_parts::riff::{RiffChunk, RiffContent};
+    use img_parts::webp::{WebP, CHUNK_XMP};
+    use img_parts::{Bytes, ImageEXIF, ImageICC};
+
+    let data = read_file(output)?;
+    let mut webp = WebP::from_bytes(data.into())
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to parse WebP for injection: {e}")))?;
+
+    if let Some(ref exif) = bundle.exif {
+        webp.set_exif(Some(Bytes::from(exif.clone())));
+    }
+
+    if let Some(ref icc) = bundle.icc {
+        webp.set_icc_profile(Some(Bytes::from(icc.clone())));
+    }
+
+    if let Some(ref xmp) = bundle.xmp {
+        webp.remove_chunks_by_id(CHUNK_XMP);
+        let chunk = RiffChunk::new(CHUNK_XMP, RiffContent::Data(Bytes::from(xmp.clone())));
+        webp.chunks_mut().push(chunk);
+    }
+
+    let file = fs::File::create(output).map_err(|e| ImgstripError::IoError {
+        path: output.to_path_buf(),
+        source: e,
+    })?;
+    webp.encoder()
+        .write_to(file)
+        .map_err(|e| ImgstripError::IoError {
+            path: output.to_path_buf(),
+            source: e,
+        })?;
+
+    Ok(())
+}
+
+/// Copy metadata from source to a TIFF output file using little_exif.
+/// This bypasses MetadataBundle because little_exif can read/write TIFF metadata
+/// directly via its IFD-aware APIs.
+pub fn inject_tiff_metadata(source: &Path, output: &Path) -> Result<(), ImgstripError> {
+    use little_exif::metadata::Metadata;
+
+    let metadata = Metadata::new_from_path(source)
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to read source metadata: {e}")))?;
+
+    metadata
+        .write_to_file(output)
+        .map_err(|e| ImgstripError::MetadataError(format!("failed to inject metadata into TIFF: {e}")))?;
+
+    Ok(())
+}
 
 /// Strip all metadata from an image file.
 /// If `output` is `None`, strip in place. Otherwise write stripped copy to `output`.
@@ -562,5 +809,218 @@ mod tests {
             err,
             ImgstripError::IoError { .. } | ImgstripError::MetadataError(_)
         ));
+    }
+
+    // --- MetadataBundle tests ---
+
+    #[test]
+    fn metadata_bundle_default_is_empty() {
+        let bundle = MetadataBundle::default();
+        assert!(bundle.is_empty());
+    }
+
+    #[test]
+    fn metadata_bundle_with_exif_is_not_empty() {
+        let bundle = MetadataBundle {
+            exif: Some(vec![0x4D, 0x4D]),
+            xmp: None,
+            icc: None,
+        };
+        assert!(!bundle.is_empty());
+    }
+
+    #[test]
+    fn metadata_bundle_with_only_icc_is_not_empty() {
+        let bundle = MetadataBundle {
+            exif: None,
+            xmp: None,
+            icc: Some(vec![0x00]),
+        };
+        assert!(!bundle.is_empty());
+    }
+
+    // --- Extract tests ---
+
+    #[test]
+    fn extract_jpeg_with_metadata() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.jpg");
+        create_jpeg_with_metadata(&path);
+
+        let bundle = extract(&path).unwrap();
+        assert!(bundle.exif.is_some(), "should extract EXIF from JPEG");
+        assert!(bundle.xmp.is_some(), "should extract XMP from JPEG");
+    }
+
+    #[test]
+    fn extract_jpeg_no_metadata() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bare.jpg");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+        }));
+        let file = fs::File::create(&path).unwrap();
+        let writer = BufWriter::new(file);
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, 90);
+        image::ImageEncoder::write_image(
+            encoder,
+            img.as_bytes(),
+            img.width(),
+            img.height(),
+            img.color().into(),
+        )
+        .unwrap();
+
+        let bundle = extract(&path).unwrap();
+        assert!(bundle.exif.is_none(), "bare JPEG should have no EXIF");
+        assert!(bundle.xmp.is_none(), "bare JPEG should have no XMP");
+    }
+
+    #[test]
+    fn extract_png_with_exif() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.png");
+        create_png_with_metadata(&path);
+
+        let bundle = extract(&path).unwrap();
+        assert!(bundle.exif.is_some(), "should extract EXIF from PNG");
+    }
+
+    #[test]
+    fn extract_bmp_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.bmp");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+        }));
+        img.save_with_format(&path, image::ImageFormat::Bmp).unwrap();
+
+        let bundle = extract(&path).unwrap();
+        assert!(bundle.is_empty(), "BMP should return empty bundle");
+    }
+
+    #[test]
+    fn extract_gif_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.gif");
+        let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(8, 8, |x, y| {
+            image::Rgba([(x * 30) as u8, (y * 30) as u8, 128, 255])
+        }));
+        img.save_with_format(&path, image::ImageFormat::Gif).unwrap();
+
+        let bundle = extract(&path).unwrap();
+        assert!(bundle.is_empty(), "GIF should return empty bundle");
+    }
+
+    // --- Inject tests ---
+
+    #[test]
+    fn inject_jpeg_exif_and_read_back() {
+        use img_parts::ImageICC;
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.jpg");
+        // Create bare JPEG
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+        }));
+        let file = fs::File::create(&path).unwrap();
+        let writer = BufWriter::new(file);
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, 90);
+        image::ImageEncoder::write_image(
+            encoder,
+            img.as_bytes(),
+            img.width(),
+            img.height(),
+            img.color().into(),
+        )
+        .unwrap();
+
+        // Inject fake metadata
+        let bundle = MetadataBundle {
+            exif: Some(b"MM\x00\x2A\x00\x00\x00\x08\x00\x00".to_vec()),
+            xmp: Some(b"<x:xmpmeta>test</x:xmpmeta>".to_vec()),
+            icc: Some(vec![0x00; 32]),
+        };
+        inject(&path, OutputFormat::Jpeg, &bundle).unwrap();
+
+        // Verify
+        let data = fs::read(&path).unwrap();
+        let jpeg = Jpeg::from_bytes(data.into()).unwrap();
+        assert!(jpeg.exif().is_some(), "EXIF should be present after injection");
+        assert!(jpeg.icc_profile().is_some(), "ICC should be present after injection");
+
+        // Verify image is still valid
+        let decoded = image::open(&path).expect("JPEG should still be decodable after injection");
+        assert_eq!(decoded.width(), 8);
+    }
+
+    #[test]
+    fn inject_png_exif_and_read_back() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.png");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+        }));
+        img.save_with_format(&path, image::ImageFormat::Png).unwrap();
+
+        let bundle = MetadataBundle {
+            exif: Some(b"MM\x00\x2A\x00\x00\x00\x08\x00\x00".to_vec()),
+            xmp: None,
+            icc: None,
+        };
+        inject(&path, OutputFormat::Png, &bundle).unwrap();
+
+        let data = fs::read(&path).unwrap();
+        let png = Png::from_bytes(data.into()).unwrap();
+        assert!(png.exif().is_some(), "EXIF should be present in PNG after injection");
+
+        let decoded = image::open(&path).expect("PNG should still be decodable after injection");
+        assert_eq!(decoded.width(), 8);
+    }
+
+    #[test]
+    fn inject_empty_bundle_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.jpg");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+        }));
+        let file = fs::File::create(&path).unwrap();
+        let writer = BufWriter::new(file);
+        let encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(writer, 90);
+        image::ImageEncoder::write_image(
+            encoder,
+            img.as_bytes(),
+            img.width(),
+            img.height(),
+            img.color().into(),
+        )
+        .unwrap();
+
+        let data_before = fs::read(&path).unwrap();
+        inject(&path, OutputFormat::Jpeg, &MetadataBundle::default()).unwrap();
+        let data_after = fs::read(&path).unwrap();
+        assert_eq!(data_before, data_after, "empty bundle should not modify file");
+    }
+
+    #[test]
+    fn inject_bmp_is_noop() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("photo.bmp");
+        let img = image::DynamicImage::ImageRgb8(image::RgbImage::from_fn(8, 8, |x, y| {
+            image::Rgb([(x * 30) as u8, (y * 30) as u8, 128])
+        }));
+        img.save_with_format(&path, image::ImageFormat::Bmp).unwrap();
+
+        let data_before = fs::read(&path).unwrap();
+        let bundle = MetadataBundle {
+            exif: Some(vec![0x4D, 0x4D]),
+            xmp: None,
+            icc: None,
+        };
+        inject(&path, OutputFormat::Bmp, &bundle).unwrap();
+        let data_after = fs::read(&path).unwrap();
+        assert_eq!(data_before, data_after, "BMP injection should be no-op");
     }
 }

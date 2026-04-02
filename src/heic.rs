@@ -4,6 +4,7 @@ use image::{DynamicImage, RgbImage, RgbaImage};
 use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
 
 use crate::error::ImgstripError;
+use crate::metadata::MetadataBundle;
 
 /// Decode a HEIC/HEIF file into a DynamicImage.
 pub fn decode_heic(path: &Path) -> Result<DynamicImage, ImgstripError> {
@@ -71,6 +72,38 @@ pub fn decode_heic(path: &Path) -> Result<DynamicImage, ImgstripError> {
     }
 }
 
+/// Extract metadata (EXIF, XMP, ICC) from a HEIC/HEIF file.
+pub fn extract_metadata(path: &Path) -> Result<MetadataBundle, ImgstripError> {
+    let path_str = path.to_str().ok_or_else(|| {
+        ImgstripError::HeicError(format!("invalid UTF-8 in path: {}", path.display()))
+    })?;
+
+    let ctx = HeifContext::read_from_file(path_str).map_err(|e| {
+        ImgstripError::HeicError(format!("failed to read HEIC file: {e}"))
+    })?;
+
+    let handle = ctx.primary_image_handle().map_err(|e| {
+        ImgstripError::HeicError(format!("failed to get primary image handle: {e}"))
+    })?;
+
+    let mut bundle = MetadataBundle::default();
+
+    for item in handle.all_metadata() {
+        if item.item_type.0 == *b"Exif" && item.raw_data.len() > 4 {
+            // Skip the 4-byte TIFF offset prefix
+            bundle.exif = Some(item.raw_data[4..].to_vec());
+        } else if item.content_type == "application/rdf+xml" {
+            bundle.xmp = Some(item.raw_data);
+        }
+    }
+
+    if let Some(profile) = handle.color_profile_raw() {
+        bundle.icc = Some(profile.data);
+    }
+
+    Ok(bundle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,7 +140,7 @@ mod tests {
             .unwrap();
         std::fs::write(
             tmp.path(),
-            &[
+            [
                 0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, b'h', b'e', b'i', b'c',
             ],
         )

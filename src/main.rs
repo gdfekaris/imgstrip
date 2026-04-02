@@ -25,9 +25,14 @@ fn main() {
                 .output
                 .unwrap_or_else(|| convert::derive_output_path(&args.input, format));
 
-            if let Err(e) =
-                convert::convert_file(&args.input, &output, format, args.quality, args.overwrite)
-            {
+            if let Err(e) = convert::convert_file(
+                &args.input,
+                &output,
+                format,
+                args.quality,
+                args.overwrite,
+                args.strip_metadata,
+            ) {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
