@@ -17,3 +17,8 @@ Thumbs.db
 
 # Design document
 imgstrip-design-document.md
+
+
+# Added by cargo
+
+/target
