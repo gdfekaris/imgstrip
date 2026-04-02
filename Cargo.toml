@@ -8,7 +8,9 @@ clap = { version = "4", features = ["derive"] }
 image = { version = "0.25", default-features = false, features = [
     "jpeg", "png", "webp", "bmp", "tiff", "gif"
 ] }
+img-parts = "0.3"
 libheif-rs = { version = "2", features = ["embedded-libheif"] }
+little_exif = "0.6"
 thiserror = "2"
 
 [dev-dependencies]

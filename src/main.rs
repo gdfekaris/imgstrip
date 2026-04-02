@@ -3,6 +3,7 @@ mod convert;
 mod error;
 mod formats;
 mod heic;
+mod metadata;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -36,12 +37,24 @@ fn main() {
             }
         }
         Command::Strip(args) => {
-            println!("Strip: {:?}", args.input);
-            if let Some(ref output) = args.output {
-                println!("  Output: {:?}", output);
+            if let Err(e) =
+                metadata::strip(&args.input, args.output.as_deref())
+            {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
             }
-            println!("  Recursive: {}", args.recursive);
-            println!("  Dry run: {}", args.dry_run);
+
+            if !cli.quiet {
+                if let Some(ref output) = args.output {
+                    println!(
+                        "Stripped metadata: {} -> {}",
+                        args.input.display(),
+                        output.display()
+                    );
+                } else {
+                    println!("Stripped metadata: {}", args.input.display());
+                }
+            }
         }
         Command::Info(args) => {
             println!("Info: {:?}", args.file);
