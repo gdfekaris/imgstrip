@@ -12,6 +12,7 @@ img-parts = "0.3"
 libheif-rs = { version = "2", features = ["embedded-libheif"] }
 little_exif = "0.6"
 thiserror = "2"
+walkdir = "2"
 
 [dev-dependencies]
 tempfile = "3"

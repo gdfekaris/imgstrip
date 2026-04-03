@@ -12,9 +12,8 @@ pub fn decode_heic(path: &Path) -> Result<DynamicImage, ImgstripError> {
         ImgstripError::HeicError(format!("invalid UTF-8 in path: {}", path.display()))
     })?;
 
-    let ctx = HeifContext::read_from_file(path_str).map_err(|e| {
-        ImgstripError::HeicError(format!("failed to read HEIC file: {e}"))
-    })?;
+    let ctx = HeifContext::read_from_file(path_str)
+        .map_err(|e| ImgstripError::HeicError(format!("failed to read HEIC file: {e}")))?;
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgstripError::HeicError(format!("failed to get primary image handle: {e}"))
@@ -33,9 +32,9 @@ pub fn decode_heic(path: &Path) -> Result<DynamicImage, ImgstripError> {
         ColorSpace::Rgb(RgbChroma::Rgb)
     };
 
-    let image = lib_heif.decode(&handle, color_space, None).map_err(|e| {
-        ImgstripError::HeicError(format!("failed to decode HEIC image: {e}"))
-    })?;
+    let image = lib_heif
+        .decode(&handle, color_space, None)
+        .map_err(|e| ImgstripError::HeicError(format!("failed to decode HEIC image: {e}")))?;
 
     let planes = image.planes();
     let interleaved = planes.interleaved.ok_or_else(|| {
@@ -78,9 +77,8 @@ pub fn extract_metadata(path: &Path) -> Result<MetadataBundle, ImgstripError> {
         ImgstripError::HeicError(format!("invalid UTF-8 in path: {}", path.display()))
     })?;
 
-    let ctx = HeifContext::read_from_file(path_str).map_err(|e| {
-        ImgstripError::HeicError(format!("failed to read HEIC file: {e}"))
-    })?;
+    let ctx = HeifContext::read_from_file(path_str)
+        .map_err(|e| ImgstripError::HeicError(format!("failed to read HEIC file: {e}")))?;
 
     let handle = ctx.primary_image_handle().map_err(|e| {
         ImgstripError::HeicError(format!("failed to get primary image handle: {e}"))
@@ -134,10 +132,7 @@ mod tests {
     #[test]
     fn decode_heic_truncated_file() {
         // Create a truncated HEIC file (just the ftyp header)
-        let tmp = tempfile::Builder::new()
-            .suffix(".heic")
-            .tempfile()
-            .unwrap();
+        let tmp = tempfile::Builder::new().suffix(".heic").tempfile().unwrap();
         std::fs::write(
             tmp.path(),
             [

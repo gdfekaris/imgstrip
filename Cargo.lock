@@ -449,6 +449,7 @@ dependencies = [
  "little_exif",
  "tempfile",
  "thiserror",
+ "walkdir",
 ]
 
 [[package]]

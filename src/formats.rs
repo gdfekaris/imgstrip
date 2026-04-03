@@ -66,6 +66,11 @@ pub fn detect_format(path: &Path) -> Result<ImageFormat, ImgstripError> {
     detect_by_magic_bytes(path)
 }
 
+/// Returns true if the file has a recognized image extension.
+pub fn has_supported_extension(path: &Path) -> bool {
+    detect_by_extension(path).is_some()
+}
+
 /// Detect format from file extension (case-insensitive).
 fn detect_by_extension(path: &Path) -> Option<ImageFormat> {
     let ext = path.extension()?.to_str()?.to_ascii_lowercase();

@@ -118,14 +118,14 @@ pub fn convert_file(
     // Inject metadata into the encoded output
     if let Some(ref bundle) = bundle {
         match format {
-            OutputFormat::Tiff => {
-                // Use little_exif to read from source and write directly to TIFF
-                if let Err(e) = metadata::inject_tiff_metadata(input, output) {
-                    eprintln!("Warning: failed to inject metadata into TIFF: {e}");
-                }
-            }
             OutputFormat::Bmp | OutputFormat::Gif => {
                 // These formats cannot carry metadata
+            }
+            OutputFormat::Tiff => {
+                // TIFF metadata injection is not supported: little_exif's write_to_file
+                // overwrites the entire TIFF (including pixel data), and img-parts has
+                // no TIFF support. Metadata is silently lost for TIFF output.
+                eprintln!("Warning: metadata preservation for TIFF output is not yet supported");
             }
             _ => {
                 if let Err(e) = metadata::inject(output, format, bundle) {
@@ -391,7 +391,7 @@ mod tests {
 
     /// Create a JPEG with fake EXIF and ICC metadata for testing metadata preservation.
     fn create_jpeg_with_metadata(dir: &Path, name: &str) -> PathBuf {
-        use img_parts::jpeg::{markers, Jpeg, JpegSegment};
+        use img_parts::jpeg::{Jpeg, JpegSegment, markers};
         use img_parts::{Bytes, ImageEXIF, ImageICC};
 
         let path = create_test_image(dir, name, OutputFormat::Jpeg);
@@ -474,20 +474,20 @@ mod tests {
         let data = fs::read(path).unwrap();
         match format {
             OutputFormat::Jpeg => {
-                use img_parts::jpeg::Jpeg;
                 use img_parts::ImageEXIF;
+                use img_parts::jpeg::Jpeg;
                 let jpeg = Jpeg::from_bytes(data.into()).unwrap();
                 jpeg.exif().is_some()
             }
             OutputFormat::Png => {
-                use img_parts::png::Png;
                 use img_parts::ImageEXIF;
+                use img_parts::png::Png;
                 let png = Png::from_bytes(data.into()).unwrap();
                 png.exif().is_some()
             }
             OutputFormat::WebP => {
-                use img_parts::webp::WebP;
                 use img_parts::ImageEXIF;
+                use img_parts::webp::WebP;
                 let webp = WebP::from_bytes(data.into()).unwrap();
                 webp.exif().is_some()
             }
@@ -499,20 +499,20 @@ mod tests {
         let data = fs::read(path).unwrap();
         match format {
             OutputFormat::Jpeg => {
-                use img_parts::jpeg::Jpeg;
                 use img_parts::ImageICC;
+                use img_parts::jpeg::Jpeg;
                 let jpeg = Jpeg::from_bytes(data.into()).unwrap();
                 jpeg.icc_profile().is_some()
             }
             OutputFormat::Png => {
-                use img_parts::png::Png;
                 use img_parts::ImageICC;
+                use img_parts::png::Png;
                 let png = Png::from_bytes(data.into()).unwrap();
                 png.icc_profile().is_some()
             }
             OutputFormat::WebP => {
-                use img_parts::webp::WebP;
                 use img_parts::ImageICC;
+                use img_parts::webp::WebP;
                 let webp = WebP::from_bytes(data.into()).unwrap();
                 webp.icc_profile().is_some()
             }
@@ -527,7 +527,10 @@ mod tests {
         let output = dir.path().join("photo.png");
         convert_file(&input, &output, OutputFormat::Png, 90, false, false).unwrap();
         assert_valid_image(&output, 8, 8);
-        assert!(has_exif(&output, OutputFormat::Png), "output PNG should have EXIF");
+        assert!(
+            has_exif(&output, OutputFormat::Png),
+            "output PNG should have EXIF"
+        );
     }
 
     #[test]
@@ -536,7 +539,10 @@ mod tests {
         let input = create_jpeg_with_metadata(dir.path(), "photo.jpg");
         let output = dir.path().join("photo.png");
         convert_file(&input, &output, OutputFormat::Png, 90, false, false).unwrap();
-        assert!(has_icc(&output, OutputFormat::Png), "output PNG should have ICC");
+        assert!(
+            has_icc(&output, OutputFormat::Png),
+            "output PNG should have ICC"
+        );
     }
 
     #[test]
@@ -546,7 +552,10 @@ mod tests {
         let output = dir.path().join("photo.webp");
         convert_file(&input, &output, OutputFormat::WebP, 90, false, false).unwrap();
         assert_valid_image(&output, 8, 8);
-        assert!(has_exif(&output, OutputFormat::WebP), "output WebP should have EXIF");
+        assert!(
+            has_exif(&output, OutputFormat::WebP),
+            "output WebP should have EXIF"
+        );
     }
 
     #[test]
@@ -555,7 +564,10 @@ mod tests {
         let input = create_jpeg_with_metadata(dir.path(), "photo.jpg");
         let output = dir.path().join("photo.webp");
         convert_file(&input, &output, OutputFormat::WebP, 90, false, false).unwrap();
-        assert!(has_icc(&output, OutputFormat::WebP), "output WebP should have ICC");
+        assert!(
+            has_icc(&output, OutputFormat::WebP),
+            "output WebP should have ICC"
+        );
     }
 
     #[test]
@@ -565,7 +577,10 @@ mod tests {
         let output = dir.path().join("photo.jpg");
         convert_file(&input, &output, OutputFormat::Jpeg, 90, false, false).unwrap();
         assert_valid_image(&output, 8, 8);
-        assert!(has_exif(&output, OutputFormat::Jpeg), "output JPEG should have EXIF");
+        assert!(
+            has_exif(&output, OutputFormat::Jpeg),
+            "output JPEG should have EXIF"
+        );
     }
 
     #[test]
@@ -575,7 +590,10 @@ mod tests {
         let output = dir.path().join("photo.png");
         convert_file(&input, &output, OutputFormat::Png, 90, false, true).unwrap();
         assert_valid_image(&output, 8, 8);
-        assert!(!has_exif(&output, OutputFormat::Png), "output PNG should NOT have EXIF when strip_metadata is true");
+        assert!(
+            !has_exif(&output, OutputFormat::Png),
+            "output PNG should NOT have EXIF when strip_metadata is true"
+        );
     }
 
     #[test]
@@ -585,7 +603,10 @@ mod tests {
         let output = dir.path().join("photo_copy.jpg");
         convert_file(&input, &output, OutputFormat::Jpeg, 90, false, false).unwrap();
         assert_valid_image(&output, 8, 8);
-        assert!(has_exif(&output, OutputFormat::Jpeg), "output JPEG should have EXIF");
+        assert!(
+            has_exif(&output, OutputFormat::Jpeg),
+            "output JPEG should have EXIF"
+        );
     }
 
     #[test]
@@ -594,6 +615,16 @@ mod tests {
         let input = create_test_image(dir.path(), "bare.png", OutputFormat::Png);
         let output = dir.path().join("bare.jpg");
         convert_file(&input, &output, OutputFormat::Jpeg, 90, false, false).unwrap();
+        assert_valid_image(&output, 8, 8);
+    }
+
+    #[test]
+    fn jpeg_to_tiff_does_not_corrupt_with_metadata() {
+        let dir = TempDir::new().unwrap();
+        let input = create_jpeg_with_metadata(dir.path(), "photo.jpg");
+        let output = dir.path().join("photo.tiff");
+        // Should succeed and produce a valid image even though TIFF can't preserve metadata
+        convert_file(&input, &output, OutputFormat::Tiff, 90, false, false).unwrap();
         assert_valid_image(&output, 8, 8);
     }
 
