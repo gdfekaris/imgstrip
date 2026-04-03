@@ -79,13 +79,37 @@ Metadata:
   ICC:  present
   IPTC: absent
 
-EXIF fields:
-  Make: Apple
-  Model: iPhone 15 Pro
-  DateTimeOriginal: 2024:12:25 10:30:00
-  Software: 17.2
-  GPS: 37.774929, -122.419416
+Camera:
+  Make        Apple
+  Model       iPhone 15 Pro
+  Lens Model  iPhone 15 Pro back triple camera 6.765mm f/1.78
+
+Exposure:
+  Exposure Time     1/125 s
+  F-Number          f/1.8
+  ISO               50
+  Focal Length      6.8 mm
+  Exposure Program  Program AE
+  Metering Mode     Multi-segment
+  Flash             Did not fire (auto mode)
+
+Date/Time:
+  Date Taken    2024:12:25 10:30:00
+  Date Created  2024:12:25 10:30:00
+
+Image:
+  Orientation  Horizontal (normal)
+  Color Space  sRGB
+
+Author:
+  Software  17.2
+
+GPS:
+  Coordinates  37.774929, -122.419416
+  Altitude     12.3 m
 ```
+
+EXIF fields are grouped by category (Camera, Exposure, Date/Time, Image, Author, GPS) and formatted for readability — integer codes are shown as human-readable labels, rationals as standard notation (e.g. `1/125 s`, `f/1.8`), and GPS coordinates as decimal degrees. Empty sections are omitted.
 
 ## Supported Formats
 
