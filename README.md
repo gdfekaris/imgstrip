@@ -65,7 +65,7 @@ imgstrip convert <INPUT> --format <FORMAT> [OPTIONS]
 | `--format <FORMAT>` | `-f` | **(Required)** Target format. One of: `jpeg`, `png`, `webp`, `bmp`, `tiff`, `gif`. |
 | `--output <PATH>` | `-o` | Where to write the output. For a single file this is the output file path; for a directory this is the output directory. If omitted, the converted file is written next to the original with the new extension (e.g. `photo.png` becomes `photo.jpg`). |
 | `--strip-metadata` | `-s` | Remove all metadata from the converted output. Without this flag, metadata is carried over from the source image. |
-| `--quality <1-100>` | | JPEG quality setting. Default is 90. Ignored for non-JPEG formats. |
+| `--quality <1-100>` | | JPEG quality setting (1-100). Default is 90. Ignored for all other formats, including WebP (see note below). |
 | `--recursive` | `-r` | When the input is a directory, also process images in subdirectories. |
 | `--overwrite` | | Allow overwriting existing output files. Without this flag, imgstrip will stop with an error if the output file already exists. |
 | `--dry-run` | | Show what would be done without actually writing any files. Useful for previewing a batch operation. |
@@ -209,10 +209,11 @@ EXIF fields are grouped by category and formatted for readability — numeric co
 
 ## Global options
 
-These options can be used with any command, and must be placed *before* the command name:
+These options can be used with any command, and can be placed before or after the command name:
 
 ```bash
 imgstrip [GLOBAL OPTIONS] <COMMAND> ...
+imgstrip <COMMAND> [GLOBAL OPTIONS] ...
 ```
 
 | Option | Short | Description |

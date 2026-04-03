@@ -48,6 +48,11 @@ fn main() {
                     .output
                     .unwrap_or_else(|| convert::derive_output_path(&args.input, format));
 
+                if args.dry_run {
+                    println!("Would convert {} -> {}", args.input.display(), output.display());
+                    return;
+                }
+
                 if let Err(e) = convert::convert_file(
                     &args.input,
                     &output,
@@ -82,6 +87,19 @@ fn main() {
                     }
                 }
             } else {
+                if args.dry_run {
+                    if let Some(ref output) = args.output {
+                        println!(
+                            "Would strip metadata: {} -> {}",
+                            args.input.display(),
+                            output.display()
+                        );
+                    } else {
+                        println!("Would strip metadata: {} (in place)", args.input.display());
+                    }
+                    return;
+                }
+
                 if let Err(e) = metadata::strip(&args.input, args.output.as_deref()) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);

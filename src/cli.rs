@@ -61,7 +61,7 @@ pub struct ConvertArgs {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// JPEG/WebP quality (1-100, default: 90)
+    /// JPEG quality (1-100, default: 90). Ignored for other formats.
     #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u8).range(1..=100))]
     pub quality: u8,
 }
