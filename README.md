@@ -2,10 +2,11 @@
 
 A lightweight command-line tool for image format conversion and metadata stripping, written in Rust.
 
-imgstrip does two things well:
+imgstrip does four things:
 
 - **Converts** images between common formats (JPEG, PNG, WebP, BMP, TIFF, GIF), with HEIC/HEIF as an input format.
 - **Strips** metadata (EXIF, XMP, IPTC, ICC profiles) from images without re-encoding the pixels — your image data stays untouched.
+- **Renames** images in a directory to a uniform naming scheme (`vacation-01.jpg`, `vacation-02.png`, ...), with automatic zero-padded numbering.
 
 It also has an **info** command that lets you inspect what metadata an image contains.
 
@@ -38,13 +39,16 @@ imgstrip convert photo.heic --format jpeg
 # Strip all metadata from a JPEG (modifies the file in place)
 imgstrip strip photo.jpg
 
+# Rename all images in a folder with a uniform prefix
+imgstrip rename ./photos --prefix vacation
+
 # See what metadata an image contains
 imgstrip info photo.jpg
 ```
 
 ## Commands
 
-imgstrip has three commands: `convert`, `strip`, and `info`. Each is described in detail below.
+imgstrip has four commands: `convert`, `strip`, `rename`, and `info`. Each is described in detail below.
 
 ---
 
@@ -69,6 +73,7 @@ imgstrip convert <INPUT> --format <FORMAT> [OPTIONS]
 | `--recursive` | `-r` | When the input is a directory, also process images in subdirectories. |
 | `--overwrite` | | Allow overwriting existing output files. Without this flag, imgstrip will stop with an error if the output file already exists. |
 | `--dry-run` | | Show what would be done without actually writing any files. Useful for previewing a batch operation. |
+| `--rename <PREFIX>` | | Rename output files with sequential numbering (e.g., `--rename vacation` produces `vacation-01.png`, `vacation-02.png`, ...). Only applies to directory operations. See [`rename`](#rename--rename-images-with-a-uniform-prefix) for details. |
 
 #### Examples
 
@@ -122,6 +127,7 @@ imgstrip strip <INPUT> [OPTIONS]
 | `--output <PATH>` | `-o` | Write the stripped file to a new path instead of overwriting the original. For a directory, this is the output directory. |
 | `--recursive` | `-r` | When the input is a directory, also process images in subdirectories. |
 | `--dry-run` | | Show what would be done without actually writing any files. |
+| `--rename <PREFIX>` | | Rename output files with sequential numbering (e.g., `--rename photo` produces `photo-01.jpg`, `photo-02.jpg`, ...). Only applies to directory operations. See [`rename`](#rename--rename-images-with-a-uniform-prefix) for details. |
 
 #### Examples
 
@@ -141,6 +147,76 @@ imgstrip strip ./photos --recursive -o ./stripped
 # Preview what would be stripped
 imgstrip strip ./photos --dry-run
 ```
+
+---
+
+### `rename` — Rename images with a uniform prefix
+
+Renames all image files in a directory to a consistent naming scheme: `<prefix>-01.ext`, `<prefix>-02.ext`, and so on. Only image files are affected — other files in the directory are left untouched. The original file extension is preserved.
+
+```bash
+imgstrip rename <INPUT> --prefix <PREFIX> [OPTIONS]
+```
+
+`<INPUT>` is a path to a directory containing image files.
+
+#### How it works
+
+1. All image files in the directory are collected and sorted alphabetically by filename.
+2. Each file is assigned a sequential number starting at 1.
+3. The file is renamed to `<prefix>-<number>.<original-extension>`.
+
+Numbers are zero-padded to at least two digits (`-01`, `-02`, ... `-99`). If there are 100 or more files, padding automatically widens to three digits (`-001`, `-002`, ... `-150`), and so on.
+
+When using `--recursive`, numbering **resets to 01** in each subdirectory — so `photos/vacation-01.jpg` and `photos/beach/vacation-01.png` can coexist.
+
+In-place renames are handled safely using a two-phase strategy, so existing filenames that collide with target names (e.g., a file already named `photo-01.jpg`) won't cause data loss.
+
+#### Options
+
+| Option | Short | Description |
+|--------|-------|-------------|
+| `--prefix <PREFIX>` | `-p` | **(Required)** The naming prefix. Each file becomes `<prefix>-<number>.<ext>`. |
+| `--output <PATH>` | `-o` | Copy renamed files to this directory instead of renaming in place. Originals are left untouched. |
+| `--recursive` | `-r` | Also process images in subdirectories. Numbering resets per subdirectory. Directory structure is preserved when combined with `--output`. |
+| `--dry-run` | | Show what would be renamed without actually changing any files. |
+
+#### Examples
+
+```bash
+# Rename all images in a folder (in place)
+# Before: IMG_4012.jpg, DSC_0087.png, photo-old.webp
+# After:  vacation-01.jpg, vacation-02.png, vacation-03.webp
+imgstrip rename ./photos --prefix vacation
+
+# Preview what would happen without changing anything
+imgstrip rename ./photos --prefix vacation --dry-run
+
+# Copy renamed files to a new folder, keeping originals intact
+imgstrip rename ./photos --prefix trip -o ./renamed
+
+# Rename recursively — numbering resets in each subfolder
+imgstrip rename ./photos --prefix pic --recursive
+
+# Recursive rename into a separate output tree
+imgstrip rename ./photos --prefix pic --recursive -o ./organized
+```
+
+#### Combining with `convert` and `strip`
+
+The `convert` and `strip` commands both accept a `--rename <PREFIX>` flag that applies the same sequential renaming to their output files during batch operations. This lets you convert or strip an entire directory and produce uniformly named output in one step.
+
+```bash
+# Convert all images to PNG and rename the output
+imgstrip convert ./photos --format png --output ./converted --rename beach-trip
+# Result: beach-trip-01.png, beach-trip-02.png, ...
+
+# Strip metadata and rename the output
+imgstrip strip ./photos --output ./clean --rename photo
+# Result: photo-01.jpg, photo-02.png, ...
+```
+
+The `--rename` flag is only meaningful for directory (batch) operations. If used with a single file, it is ignored with a warning.
 
 ---
 

@@ -30,6 +30,9 @@ pub enum Command {
 
     /// Display metadata summary for an image
     Info(InfoArgs),
+
+    /// Rename image files with a sequential prefix
+    Rename(RenameArgs),
 }
 
 #[derive(Parser)]
@@ -64,6 +67,10 @@ pub struct ConvertArgs {
     /// JPEG quality (1-100, default: 90). Ignored for other formats.
     #[arg(long, default_value_t = 90, value_parser = clap::value_parser!(u8).range(1..=100))]
     pub quality: u8,
+
+    /// Rename output files with sequential numbering using this prefix
+    #[arg(long)]
+    pub rename: Option<String>,
 }
 
 #[derive(Parser)]
@@ -82,10 +89,36 @@ pub struct StripArgs {
     /// Show what would be done without writing files
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Rename output files with sequential numbering using this prefix
+    #[arg(long)]
+    pub rename: Option<String>,
 }
 
 #[derive(Parser)]
 pub struct InfoArgs {
     /// Path to an image file
     pub file: PathBuf,
+}
+
+#[derive(Parser)]
+pub struct RenameArgs {
+    /// Path to a directory containing image files
+    pub input: PathBuf,
+
+    /// Prefix for renamed files (e.g., "vacation" produces vacation-01.jpg)
+    #[arg(short, long)]
+    pub prefix: String,
+
+    /// Output directory (default: rename in place)
+    #[arg(short, long)]
+    pub output: Option<PathBuf>,
+
+    /// Process directories recursively
+    #[arg(short, long)]
+    pub recursive: bool,
+
+    /// Show what would be done without writing files
+    #[arg(long)]
+    pub dry_run: bool,
 }

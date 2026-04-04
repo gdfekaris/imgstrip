@@ -29,4 +29,7 @@ pub enum ImgstripError {
 
     #[error("Output file already exists: {path} (use --overwrite to replace)")]
     OutputExists { path: PathBuf },
+
+    #[error("Invalid argument: {0}")]
+    InvalidArgument(String),
 }

@@ -7,6 +7,7 @@ use crate::convert;
 use crate::error::ImgstripError;
 use crate::formats::{self, OutputFormat};
 use crate::metadata;
+use crate::rename;
 
 /// Result of a batch operation across multiple files.
 pub struct BatchReport {
@@ -31,6 +32,7 @@ pub struct BatchOptions {
     pub dry_run: bool,
     pub output_dir: Option<PathBuf>,
     pub verbose: bool,
+    pub rename_prefix: Option<String>,
 }
 
 /// Process all supported image files in a directory.
@@ -43,6 +45,9 @@ pub fn process_directory(
         succeeded: 0,
         failed: Vec::new(),
     };
+
+    // Track output file paths for post-process renaming
+    let mut output_files: Vec<PathBuf> = Vec::new();
 
     // Configure walk depth
     let walker = if options.recursive {
@@ -121,7 +126,7 @@ pub fn process_directory(
         }
 
         // Execute the operation
-        let result = match operation {
+        let (result, output_path) = match operation {
             Operation::Convert {
                 format,
                 quality,
@@ -141,27 +146,29 @@ pub fn process_directory(
                 if options.verbose {
                     eprintln!("Converting {} -> {}", path.display(), output.display());
                 }
-                convert::convert_file(
+                let out_clone = output.clone();
+                let res = convert::convert_file(
                     path,
                     &output,
                     *format,
                     *quality,
                     *overwrite,
                     *strip_metadata,
-                )
+                );
+                (res, out_clone)
             }
             Operation::Strip => {
-                let output_path = options.output_dir.as_ref().map(|_| {
+                let out = options.output_dir.as_ref().map(|_| {
                     derive_batch_output(path, input_dir, options.output_dir.as_deref(), None)
                 });
-                if let Some(ref out) = output_path
+                if let Some(ref out) = out
                     && let Err(e) = ensure_parent_dir(out)
                 {
                     report.failed.push((path.to_path_buf(), e));
                     continue;
                 }
                 if options.verbose {
-                    if let Some(ref out) = output_path {
+                    if let Some(ref out) = out {
                         eprintln!(
                             "Stripping metadata: {} -> {}",
                             path.display(),
@@ -171,13 +178,35 @@ pub fn process_directory(
                         eprintln!("Stripping metadata: {}", path.display());
                     }
                 }
-                metadata::strip(path, output_path.as_deref())
+                let effective_output = out.clone().unwrap_or_else(|| path.to_path_buf());
+                let res = metadata::strip(path, out.as_deref());
+                (res, effective_output)
             }
         };
 
         match result {
-            Ok(()) => report.succeeded += 1,
+            Ok(()) => {
+                report.succeeded += 1;
+                if options.rename_prefix.is_some() {
+                    output_files.push(output_path);
+                }
+            }
             Err(e) => report.failed.push((path.to_path_buf(), e)),
+        }
+    }
+
+    // Post-process: rename output files if --rename was specified
+    if let Some(ref prefix) = options.rename_prefix
+        && !output_files.is_empty()
+    {
+        let rename_report =
+            rename::rename_files_with_prefix(&output_files, prefix, options.dry_run, options.verbose);
+
+        // The rename replaces the files we already counted as succeeded,
+        // so only add failures (successes are already counted)
+        for failure in rename_report.failed {
+            // A rename failure doesn't un-do the convert/strip, but we should report it
+            report.failed.push(failure);
         }
     }
 
@@ -282,6 +311,7 @@ mod tests {
             dry_run: false,
             output_dir: None,
             verbose: false,
+            rename_prefix: None,
         }
     }
 
@@ -551,5 +581,74 @@ mod tests {
         let report = process_directory(&input, &op, &default_options()).unwrap();
         assert_eq!(report.succeeded, 0);
         assert!(report.failed.is_empty());
+    }
+
+    // --- Composability: --rename with convert/strip ---
+
+    #[test]
+    fn batch_convert_with_rename() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("input");
+        let output = dir.path().join("output");
+        fs::create_dir_all(&input).unwrap();
+
+        create_test_image(&input.join("cat.jpg"), OutputFormat::Jpeg);
+        create_test_image(&input.join("apple.png"), OutputFormat::Png);
+        create_test_image(&input.join("bee.bmp"), OutputFormat::Bmp);
+
+        let op = Operation::Convert {
+            format: OutputFormat::Png,
+            quality: 90,
+            overwrite: false,
+            strip_metadata: false,
+        };
+        let opts = BatchOptions {
+            output_dir: Some(output.clone()),
+            rename_prefix: Some("vacation".to_string()),
+            ..default_options()
+        };
+
+        let report = process_directory(&input, &op, &opts).unwrap();
+        assert_eq!(report.succeeded, 3);
+        assert!(report.failed.is_empty());
+
+        // Files should be renamed with prefix
+        assert!(output.join("vacation-01.png").exists());
+        assert!(output.join("vacation-02.png").exists());
+        assert!(output.join("vacation-03.png").exists());
+
+        // Original convert output names should not exist
+        assert!(!output.join("apple.png").exists());
+        assert!(!output.join("bee.png").exists());
+        assert!(!output.join("cat.png").exists());
+    }
+
+    #[test]
+    fn batch_strip_with_rename() {
+        let dir = TempDir::new().unwrap();
+        let input = dir.path().join("input");
+        let output = dir.path().join("output");
+        fs::create_dir_all(&input).unwrap();
+
+        create_test_image(&input.join("x.jpg"), OutputFormat::Jpeg);
+        create_test_image(&input.join("a.jpg"), OutputFormat::Jpeg);
+
+        let op = Operation::Strip;
+        let opts = BatchOptions {
+            output_dir: Some(output.clone()),
+            rename_prefix: Some("photo".to_string()),
+            ..default_options()
+        };
+
+        let report = process_directory(&input, &op, &opts).unwrap();
+        assert_eq!(report.succeeded, 2);
+        assert!(report.failed.is_empty());
+
+        assert!(output.join("photo-01.jpg").exists());
+        assert!(output.join("photo-02.jpg").exists());
+
+        // Original names should not exist in output
+        assert!(!output.join("a.jpg").exists());
+        assert!(!output.join("x.jpg").exists());
     }
 }

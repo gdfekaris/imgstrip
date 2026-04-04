@@ -6,6 +6,7 @@ mod formats;
 mod heic;
 mod info;
 mod metadata;
+mod rename;
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -35,6 +36,7 @@ fn main() {
                     dry_run: args.dry_run,
                     output_dir: args.output,
                     verbose: cli.verbose,
+                    rename_prefix: args.rename,
                 };
                 match batch::process_directory(&args.input, &operation, &options) {
                     Ok(report) => print_report(&report, cli.quiet),
@@ -44,6 +46,10 @@ fn main() {
                     }
                 }
             } else {
+                if args.rename.is_some() {
+                    eprintln!("Warning: --rename is ignored for single-file conversion");
+                }
+
                 let output = args
                     .output
                     .unwrap_or_else(|| convert::derive_output_path(&args.input, format));
@@ -78,6 +84,7 @@ fn main() {
                     dry_run: args.dry_run,
                     output_dir: args.output,
                     verbose: cli.verbose,
+                    rename_prefix: args.rename,
                 };
                 match batch::process_directory(&args.input, &operation, &options) {
                     Ok(report) => print_report(&report, cli.quiet),
@@ -87,6 +94,10 @@ fn main() {
                     }
                 }
             } else {
+                if args.rename.is_some() {
+                    eprintln!("Warning: --rename is ignored for single-file stripping");
+                }
+
                 if args.dry_run {
                     if let Some(ref output) = args.output {
                         println!(
@@ -124,6 +135,43 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Command::Rename(args) => {
+            if !args.input.is_dir() {
+                eprintln!("Error: {} is not a directory", args.input.display());
+                std::process::exit(1);
+            }
+
+            let options = rename::RenameOptions {
+                recursive: args.recursive,
+                dry_run: args.dry_run,
+                output_dir: args.output,
+                verbose: cli.verbose,
+            };
+
+            match rename::rename_directory(&args.input, &args.prefix, &options) {
+                Ok(report) => print_rename_report(&report, cli.quiet),
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+    }
+}
+
+fn print_rename_report(report: &rename::RenameReport, quiet: bool) {
+    if !quiet {
+        println!("Renamed {} file(s) successfully", report.succeeded);
+    }
+
+    if !report.failed.is_empty() {
+        for (path, error) in &report.failed {
+            eprintln!("Error: {}: {error}", path.display());
+        }
+        if !quiet {
+            eprintln!("{} file(s) failed", report.failed.len());
+        }
+        std::process::exit(1);
     }
 }
 
