@@ -73,17 +73,27 @@ pub fn convert_file(
             })?;
             let writer = BufWriter::new(out_file);
             let encoder = JpegEncoder::new_with_quality(writer, quality);
-            encoder
-                .write_image(
+            // JPEG has no alpha channel; flatten to RGB8 when the source carries one.
+            let encode_result = if img.color().has_alpha() {
+                let rgb = img.to_rgb8();
+                encoder.write_image(
+                    rgb.as_raw(),
+                    rgb.width(),
+                    rgb.height(),
+                    image::ExtendedColorType::Rgb8,
+                )
+            } else {
+                encoder.write_image(
                     img.as_bytes(),
                     img.width(),
                     img.height(),
                     img.color().into(),
                 )
-                .map_err(|e| ImgstripError::EncodeError {
-                    format: format.to_string(),
-                    source: Box::new(e),
-                })?;
+            };
+            encode_result.map_err(|e| ImgstripError::EncodeError {
+                format: format.to_string(),
+                source: Box::new(e),
+            })?;
         }
         OutputFormat::WebP => {
             let out_file = fs::File::create(output).map_err(|e| ImgstripError::IoError {
@@ -204,6 +214,20 @@ mod tests {
         let input = create_test_image(dir.path(), "photo.jpg", OutputFormat::Jpeg);
         let output = dir.path().join("photo.webp");
         convert_file(&input, &output, OutputFormat::WebP, 90, false, false).unwrap();
+        assert_valid_image(&output, 8, 8);
+    }
+
+    #[test]
+    fn rgba_png_to_jpeg() {
+        use image::RgbaImage;
+        let dir = TempDir::new().unwrap();
+        let img = DynamicImage::ImageRgba8(RgbaImage::from_fn(8, 8, |x, y| {
+            image::Rgba([(x * 30) as u8, (y * 30) as u8, 128, 200])
+        }));
+        let input = dir.path().join("rgba.png");
+        img.save_with_format(&input, image::ImageFormat::Png).unwrap();
+        let output = dir.path().join("rgba.jpg");
+        convert_file(&input, &output, OutputFormat::Jpeg, 90, false, false).unwrap();
         assert_valid_image(&output, 8, 8);
     }
 
