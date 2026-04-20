@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::BufWriter;
+use std::io::{BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 
 use image::ImageEncoder;
@@ -56,12 +56,24 @@ pub fn convert_file(
         }
     };
 
-    // Decode — use libheif for HEIC, image crate for everything else
+    // Decode — use libheif for HEIC, image crate for everything else.
+    // We pass the magic-byte-detected format explicitly so files with a
+    // misleading extension (e.g., a WebP named *.jpg) decode correctly
+    // instead of being routed to the wrong decoder.
     let detected = formats::detect_format(input)?;
     let img = if detected == ImageFormat::Heic {
         heic::decode_heic(input)?
     } else {
-        image::open(input).map_err(|e| ImgstripError::DecodeError(e.to_string()))?
+        let image_fmt = detected
+            .to_image_format()
+            .expect("non-HEIC formats map to image::ImageFormat");
+        let file = fs::File::open(input).map_err(|e| ImgstripError::IoError {
+            path: input.to_path_buf(),
+            source: e,
+        })?;
+        image::ImageReader::with_format(BufReader::new(file), image_fmt)
+            .decode()
+            .map_err(|e| ImgstripError::DecodeError(e.to_string()))?
     };
 
     // Encode to target format (each arm manages its own file handle)

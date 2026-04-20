@@ -55,15 +55,20 @@ impl fmt::Display for OutputFormat {
     }
 }
 
-/// Detect the image format of a file by extension first, then magic bytes.
+/// Detect the image format of a file by magic bytes first, then extension.
+///
+/// Magic bytes are authoritative — extensions can lie (scrapers rename files,
+/// CMSs re-encode without updating the extension). We only fall back to the
+/// extension when the file has no recognizable magic, which covers corrupt
+/// headers and empty files (so callers still surface a useful format name
+/// before downstream decode fails).
 pub fn detect_format(path: &Path) -> Result<ImageFormat, ImgstripError> {
-    // Try extension first
-    if let Some(format) = detect_by_extension(path) {
-        return Ok(format);
+    match detect_by_magic_bytes(path) {
+        Ok(format) => Ok(format),
+        Err(ImgstripError::UnsupportedFormat(_)) => detect_by_extension(path)
+            .ok_or_else(|| ImgstripError::UnsupportedFormat(format!("{}", path.display()))),
+        Err(e) => Err(e),
     }
-
-    // Fall back to magic bytes
-    detect_by_magic_bytes(path)
 }
 
 /// Returns true if the file has a recognized image extension.
@@ -166,6 +171,23 @@ pub fn parse_output_format(s: &str) -> Result<OutputFormat, ImgstripError> {
         _ => Err(ImgstripError::UnsupportedFormat(format!(
             "unsupported output format: {s}"
         ))),
+    }
+}
+
+impl ImageFormat {
+    /// Map to the `image` crate's `ImageFormat`. Returns `None` for HEIC,
+    /// which the `image` crate does not support — callers must dispatch HEIC
+    /// to `heic::decode_heic` before reaching for this.
+    pub fn to_image_format(self) -> Option<image::ImageFormat> {
+        match self {
+            ImageFormat::Jpeg => Some(image::ImageFormat::Jpeg),
+            ImageFormat::Png => Some(image::ImageFormat::Png),
+            ImageFormat::WebP => Some(image::ImageFormat::WebP),
+            ImageFormat::Bmp => Some(image::ImageFormat::Bmp),
+            ImageFormat::Tiff => Some(image::ImageFormat::Tiff),
+            ImageFormat::Gif => Some(image::ImageFormat::Gif),
+            ImageFormat::Heic => None,
+        }
     }
 }
 
@@ -359,6 +381,31 @@ mod tests {
             ],
         );
         assert_eq!(detect_format(f.path()).unwrap(), ImageFormat::Heic);
+    }
+
+    // --- Disagreement: magic bytes win over extension ---
+
+    #[test]
+    fn magic_bytes_override_misleading_jpg_extension() {
+        // Regression: WebP payload with a .jpg extension (seen in the wild from
+        // image scrapers). Before magic-bytes-first, this routed to the JPEG
+        // decoder and failed with "Illegal start bytes:5249".
+        let f = write_temp_file("jpg", b"RIFF\x00\x00\x00\x00WEBP");
+        assert_eq!(detect_format(f.path()).unwrap(), ImageFormat::WebP);
+    }
+
+    #[test]
+    fn magic_bytes_override_misleading_png_extension() {
+        let f = write_temp_file("png", &[0xFF, 0xD8, 0xFF, 0xE0]);
+        assert_eq!(detect_format(f.path()).unwrap(), ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn extension_used_when_magic_unrecognized() {
+        // Corrupt/short header — fall back to extension so downstream decode
+        // still runs and produces a format-specific error.
+        let f = write_temp_file("jpg", b"garbage");
+        assert_eq!(detect_format(f.path()).unwrap(), ImageFormat::Jpeg);
     }
 
     // --- Error cases ---

@@ -71,16 +71,32 @@ fn print_image_dimensions(path: &Path, format: ImageFormat) -> Result<(), Imgstr
         let img = crate::heic::decode_heic(path)?;
         println!("Dimensions: {}x{}", img.width(), img.height());
         println!("Color type: {:?}", img.color());
-    } else {
-        match image::image_dimensions(path) {
-            Ok((w, h)) => println!("Dimensions: {w}x{h}"),
-            Err(e) => println!("Dimensions: unknown ({e})"),
-        }
-        // Color type requires a full decode, use the image reader for it
-        match image::open(path) {
-            Ok(img) => println!("Color type: {:?}", img.color()),
-            Err(_) => println!("Color type: unknown"),
-        }
+        return Ok(());
+    }
+
+    // Use the magic-byte-detected format so a mislabeled file (e.g., a WebP
+    // named *.jpg) still reports correct dimensions / color type instead of
+    // the image crate failing on an extension-guessed format mismatch.
+    let image_fmt = format
+        .to_image_format()
+        .expect("non-HEIC formats map to image::ImageFormat");
+
+    let open_reader = || -> std::io::Result<_> {
+        let file = std::fs::File::open(path)?;
+        Ok(image::ImageReader::with_format(
+            std::io::BufReader::new(file),
+            image_fmt,
+        ))
+    };
+
+    match open_reader().and_then(|r| r.into_dimensions().map_err(std::io::Error::other)) {
+        Ok((w, h)) => println!("Dimensions: {w}x{h}"),
+        Err(e) => println!("Dimensions: unknown ({e})"),
+    }
+    // Color type requires a full decode.
+    match open_reader().and_then(|r| r.decode().map_err(std::io::Error::other)) {
+        Ok(img) => println!("Color type: {:?}", img.color()),
+        Err(_) => println!("Color type: unknown"),
     }
     Ok(())
 }
